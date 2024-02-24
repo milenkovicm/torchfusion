@@ -149,13 +149,12 @@ where
 
         let current: &[T::Native] = &values.values()[start..end];
         let tensor = tch::Tensor::from_slice(current);
+        let logits = model.forward(&tensor);
 
-        let indices = model.forward(&tensor);
-
-        let indices = Vec::<T::Native>::try_from(indices)
+        let logits = Vec::<T::Native>::try_from(logits)
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-        result.append_slice(&indices[..]);
+        result.append_slice(&logits[..]);
         result_offsets.push(result.len() as i32);
     }
 
