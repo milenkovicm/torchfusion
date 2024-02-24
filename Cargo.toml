@@ -1,0 +1,20 @@
+[package]
+name = "torchfusion"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "^1.36", features = ["rt-multi-thread"]}
+# datafusion = { version = "36" }
+datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", branch = "handle_udf_functions" }
+thiserror = { version = "1.0"}
+log = { version = "0.4" }
+tch = { version = "0.15", features = ["download-libtorch"] }
+#tch = { version = "0.14", features = [] }
+async-trait = { version = "0.1" }
+parking_lot = { version = "0.12" }
+[dev-dependencies]
+ctor = { version = "0.2"}
+env_logger = { version = "0.11" }
