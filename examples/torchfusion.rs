@@ -26,8 +26,8 @@ async fn main() {
 
     // we define a torch model to use
     let sql = r#"
-    CREATE FUNCTION iris(FLOAT)
-    RETURNS FLOAT
+    CREATE FUNCTION iris(FLOAT[])
+    RETURNS FLOAT[]
     LANGUAGE TORCH
     AS 'model/iris.spt'
     "#;

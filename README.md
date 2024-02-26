@@ -7,8 +7,8 @@ Torchfusion is an very opiniated torch and datafusion integration, implemented t
 A torch model can be defined as and SQL UDF definition:
 
 ```sql
-CREATE FUNCTION iris(FLOAT)
-RETURNS FLOAT
+CREATE FUNCTION iris(FLOAT[])
+RETURNS FLOAT[]
 LANGUAGE TORCH
 AS '/models/iris.pt'
 ```
@@ -19,8 +19,8 @@ Return statement points to locaton where scripted model file is located.
 or, something which is not implemented in this example, referencing a model in MlFlow repository:
 
 ```sql
-CREATE FUNCTION iris(FLOAT)
-RETURNS FLOAT
+CREATE FUNCTION iris(FLOAT[])
+RETURNS FLOAT[]
 LANGUAGE TORCH
 AS 'models:/iris@champion'
 ```
@@ -44,8 +44,8 @@ ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default())
 
 // we define a torch model to use
 let sql = r#"
-CREATE FUNCTION iris(FLOAT)
-RETURNS FLOAT
+CREATE FUNCTION iris(FLOAT[])
+RETURNS FLOAT[]
 LANGUAGE TORCH
 AS 'model/iris.spt'
 "#;

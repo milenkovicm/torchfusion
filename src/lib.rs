@@ -15,7 +15,9 @@ use datafusion::{
         context::{FunctionFactory, SessionState},
         FunctionRegistry,
     },
-    logical_expr::{create_udf, ColumnarValue, CreateFunction, ScalarUDF, Volatility},
+    logical_expr::{
+        create_udf, ColumnarValue, CreateFunction, DropFunction, ScalarUDF, Volatility,
+    },
     sql::sqlparser::ast::FunctionDefinition,
 };
 use parking_lot::RwLock;
@@ -41,6 +43,20 @@ impl FunctionFactory for TorchFunctionFactory {
             })
             .unwrap_or(DataType::Float32);
 
+        let data_type = match data_type {
+            // We're interested in array type not the array.
+            // There is discrepancy between array type defined by create function
+            // `List(Field { name: \"field\", data_type: Float32, nullable:  ...``
+            // and arry type defined by create array operation
+            //`[List(Field { name: \"item\", data_type: Float64, nullable: true, ...`
+            // so we just extract bits we need
+            //
+            // In general type handling is very optimistic
+            // at the moment, but good enough for poc
+            DataType::List(f) => f.data_type().clone(),
+            r => r,
+        };
+
         let model_file = match statement.params.as_ {
             Some(FunctionDefinition::DoubleDollarDef(s)) => s,
             Some(FunctionDefinition::SingleQuotedDef(s)) => s,
@@ -50,6 +66,16 @@ impl FunctionFactory for TorchFunctionFactory {
         let model_udf = load_torch_model(&model_name, &model_file, data_type)?;
         state.write().register_udf(Arc::new(model_udf))?;
 
+        Ok(())
+    }
+
+    async fn remove(
+        &self,
+        _state: Arc<RwLock<SessionState>>,
+        _statement: DropFunction,
+    ) -> datafusion::error::Result<()> {
+        // remove is a no-on as session state does not expose
+        // remove_udf currently
         Ok(())
     }
 }
@@ -62,13 +88,13 @@ pub fn load_torch_model(model_name: &str, model_file: &str, dtype: DataType) -> 
     let type_filed = Arc::new(Field::new("item", dtype.clone(), false));
     let type_item = DataType::List(type_filed.clone());
     let type_args = vec![type_item.clone()];
+    // we should handle return type as defined in function declaration
     let type_return = Arc::new(type_item.clone());
 
     //
     //
     //
 
-    // let model_file = format!("model/{}.spt", model_name);
     let mut model =
         tch::CModule::load(model_file).map_err(|e| DataFusionError::Execution(e.to_string()))?;
     model
@@ -146,11 +172,13 @@ where
     for o in offsets.windows(2) {
         let start = o[0] as usize;
         let end = o[1] as usize;
-
+        // batching should be provided,
+        // device selection ...
         let current: &[T::Native] = &values.values()[start..end];
         let tensor = tch::Tensor::from_slice(current);
         let logits = model.forward(&tensor);
 
+        // can we use tensor to convert logits type to result type?
         let logits = Vec::<T::Native>::try_from(logits)
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
@@ -167,7 +195,7 @@ where
 
     Ok(array)
 }
-
+/// there is probably better implementation of argmax
 pub fn f32_argmax_udf() -> ScalarUDF {
     let f = Arc::new(move |args: &[ColumnarValue]| {
         let args = ColumnarValue::values_to_arrays(args)?;
