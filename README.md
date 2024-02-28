@@ -1,6 +1,6 @@
 # TorchFusion
 
-Torchfusion is an very opiniated torch and datafusion integration, implemented to demonstrate datafusion `FunctionFactory` functionality merge request. It has not been envisaged as a activly maintained library.
+Torchfusion is an very opiniated torch and datafusion integration, implemented to demonstrate datafusion `FunctionFactory` functionality merge request ([#9333](https://github.com/apache/arrow-datafusion/pull/9333)). It has not been envisaged as a activly maintained library.
 
 ## How to use
 
