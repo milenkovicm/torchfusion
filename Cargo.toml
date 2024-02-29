@@ -3,12 +3,11 @@ name = "torchfusion"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 tokio = { version = "^1.36", features = ["rt-multi-thread"]}
 # datafusion = { version = "36" }
-datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", branch = "create_function_factory" }
+# datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", branch = "create_function_factory" }
+datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", rev="caecde" }
 thiserror = { version = "1.0"}
 log = { version = "0.4" }
 tch = { version = "0.15", features = ["download-libtorch"] }
