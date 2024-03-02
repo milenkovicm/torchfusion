@@ -1,24 +1,25 @@
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 use datafusion::{
     arrow::{
         array::{
-            ArrayBuilder, ArrayRef, Float32Builder, Float64Builder, GenericListArray, ListArray,
-            PrimitiveArray, PrimitiveBuilder, UInt32Builder,
+            Array, ArrayBuilder, ArrayRef, Float32Builder, Float64Builder, GenericListArray,
+            ListArray, PrimitiveArray, PrimitiveBuilder, UInt32Builder,
         },
         buffer::{OffsetBuffer, ScalarBuffer},
         datatypes::{ArrowPrimitiveType, DataType, Field},
-        error::Result,
     },
+    common::internal_err,
     config::{ConfigEntry, ConfigExtension, ExtensionOptions},
-    error::DataFusionError,
+    error::{DataFusionError, Result},
     execution::{
         config::SessionConfig,
         context::{FunctionFactory, RegisterFunction, SessionContext, SessionState},
         runtime_env::{RuntimeConfig, RuntimeEnv},
     },
     logical_expr::{
-        create_udf, ColumnarValue, CreateFunction, DefinitionStatement, ScalarUDF, Volatility,
+        create_udf, ColumnarValue, CreateFunction, DefinitionStatement, FuncMonotonicity,
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     },
 };
 
@@ -211,52 +212,6 @@ where
 
     Ok(array)
 }
-/// there is probably better implementation of argmax
-pub fn f32_argmax_udf() -> ScalarUDF {
-    let f = Arc::new(move |args: &[ColumnarValue]| {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        let features = datafusion::common::cast::as_list_array(&args[0])?;
-
-        let values = datafusion::common::cast::as_float32_array(features.values())?;
-        let offsets = features.offsets();
-
-        let mut result = UInt32Builder::new();
-        offsets.windows(2).for_each(|o| {
-            let start = o[0] as usize;
-            let end = o[1] as usize;
-
-            let current = &values.values()[start..end];
-
-            result.append_option(f32_argmax(current));
-        });
-
-        Ok(ColumnarValue::from(Arc::new(result.finish()) as ArrayRef))
-    });
-
-    let arg_type = DataType::List(Arc::new(Field::new("item", DataType::Float32, false)));
-    let args = vec![arg_type.clone()];
-
-    create_udf(
-        "f32_argmax",
-        args,
-        Arc::new(DataType::UInt32),
-        Volatility::Immutable,
-        f,
-    )
-}
-
-fn f32_argmax(values: &[f32]) -> Option<u32> {
-    let result = values
-        .iter()
-        .enumerate()
-        .fold(None, |a, (pos, value)| match a {
-            None => Some((pos, value)),
-            Some((_, a_value)) if value > a_value => Some((pos, value)),
-            Some(a) => Some(a),
-        });
-
-    result.map(|(pos, _)| pos as u32)
-}
 
 pub fn configure_context() -> SessionContext {
     let runtime_config = RuntimeConfig::new();
@@ -272,7 +227,7 @@ pub fn configure_context() -> SessionContext {
         .with_function_factory(Arc::new(TorchFunctionFactory {}));
     let ctx = SessionContext::new_with_state(state);
 
-    ctx.register_udf(crate::f32_argmax_udf());
+    ctx.register_udf(ScalarUDF::from(ArgMax::new()));
 
     ctx
 }
@@ -357,11 +312,127 @@ impl TorchConfig {
 impl ConfigExtension for TorchConfig {
     const PREFIX: &'static str = "torch";
 }
+#[derive(Debug, Clone)]
+struct ArgMax {
+    signature: Signature,
+}
+
+impl ArgMax {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                1,
+                vec![
+                    DataType::Float32,
+                    DataType::Float64,
+                    DataType::Int32,
+                    DataType::Int64,
+                ]
+                .into_iter()
+                .map(|t| DataType::List(Arc::new(Field::new("item", t, false))))
+                .collect::<Vec<_>>(),
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArgMax {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "argmax"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt32)
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(args)?;
+        let features = datafusion::common::cast::as_list_array(&args[0])?;
+
+        let data_type = match features.data_type() {
+            DataType::List(f) => f.data_type(),
+            t => internal_err!("Argument should be a list {t}")?,
+        };
+
+        match data_type {
+            DataType::Float32 => {
+                let values = datafusion::common::cast::as_float32_array(features.values())?;
+                let offsets = features.offsets();
+                Self::find_max(values, offsets)
+            }
+            DataType::Float64 => {
+                let values = datafusion::common::cast::as_float32_array(features.values())?;
+                let offsets = features.offsets();
+                Self::find_max(values, offsets)
+            }
+            DataType::Int32 => {
+                let values = datafusion::common::cast::as_int32_array(features.values())?;
+                let offsets = features.offsets();
+                Self::find_max(values, offsets)
+            }
+            DataType::Int64 => {
+                let values = datafusion::common::cast::as_int64_array(features.values())?;
+                let offsets = features.offsets();
+                Self::find_max(values, offsets)
+            }
+            t => internal_err!("Unsuported type {t}")?,
+        }
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
+        Ok(None)
+    }
+}
+
+impl ArgMax {
+    fn find_max<T: ArrowPrimitiveType>(
+        values: &PrimitiveArray<T>,
+        offsets: &OffsetBuffer<i32>,
+    ) -> Result<ColumnarValue> {
+        let mut result = UInt32Builder::new();
+        offsets.windows(2).for_each(|o| {
+            let start = o[0] as usize;
+            let end = o[1] as usize;
+
+            let current = &values.values()[start..end];
+
+            result.append_option(Self::argmax(current));
+        });
+
+        Ok(ColumnarValue::from(Arc::new(result.finish()) as ArrayRef))
+    }
+
+    fn argmax<T: std::cmp::PartialOrd>(values: &[T]) -> Option<u32> {
+        let result = values
+            .iter()
+            .enumerate()
+            .fold(None, |a, (pos, value)| match a {
+                None => Some((pos, value)),
+                Some((_, a_value)) if value > a_value => Some((pos, value)),
+                Some(a) => Some(a),
+            });
+
+        result.map(|(pos, _)| pos as u32)
+    }
+}
 
 mod test {
 
     #[test]
     fn arg_max_test() {
-        assert_eq!(Some(1), crate::f32_argmax(&vec![1.0, 3.0, 2.0]))
+        assert_eq!(Some(1), crate::ArgMax::argmax(&vec![1.0, 3.0, 2.0]))
     }
 }
