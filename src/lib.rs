@@ -30,7 +30,7 @@ pub struct TorchFunctionFactory {}
 impl FunctionFactory for TorchFunctionFactory {
     async fn create(
         &self,
-        _state: &SessionConfig,
+        state: &SessionConfig,
         statement: CreateFunction,
     ) -> datafusion::error::Result<RegisterFunction> {
         let model_name = statement.name;
@@ -63,7 +63,14 @@ impl FunctionFactory for TorchFunctionFactory {
             Some(DefinitionStatement::SingleQuotedDef(s)) => s,
             _ => format!("model/{}.spt", model_name),
         };
-        let device = Device::Cpu;
+        let config = state
+            .options()
+            .extensions
+            .get::<TorchConfig>()
+            .expect("torch configuration to be configured");
+
+        // same device will be used untill function is dropped
+        let device = config.device;
         let model_udf = load_torch_model(&model_name, &model_file, data_type, device)?;
 
         Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
@@ -303,7 +310,7 @@ impl ExtensionOptions for TorchConfig {
             "device" => self.device = self.parse_device(value)?,
             "cuda_device" => {
                 self.cuda_device = value.parse().map_err(|_| {
-                    DataFusionError::Configuration(format!("Cuda device not correct"))
+                    DataFusionError::Configuration("Cuda device id format not correct".to_string())
                 })?
             }
             key => Err(DataFusionError::Configuration(format!(
@@ -319,12 +326,12 @@ impl ExtensionOptions for TorchConfig {
             ConfigEntry {
                 key: "device".into(),
                 value: Some(format!("{:?}", self.device)),
-                description: "device to run model on",
+                description: "Device to run model on. Valid values 'cpu', 'cuda', 'mps', 'vulkan'. Default: 'cpu' ",
             },
             ConfigEntry {
                 key: "cuda_device".into(),
                 value: Some(format!("{}", self.cuda_device)),
-                description: "cuda device to use (usize)",
+                description: "Cuda device to use. Valid value positive integer. Default: 0",
             },
         ]
     }
@@ -342,8 +349,8 @@ impl TorchConfig {
             )))?,
         }
     }
-    pub fn device(&self) -> &Device {
-        &self.device
+    pub fn device(&self) -> Device {
+        self.device
     }
 }
 

@@ -1,10 +1,13 @@
 #[tokio::main]
-async fn main() {
+async fn main() -> datafusion::error::Result<()> {
     let ctx = torchfusion::configure_context();
 
     ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default())
         .await
         .expect("table to be loaded");
+
+    ctx.sql("SET torch.device = cpu").await?;
+    // ctx.sql("SET torch.cuda_device = 0").await?;
 
     // we define a torch model to use
     let sql = r#"
@@ -14,7 +17,7 @@ async fn main() {
     AS 'model/iris.spt'
     "#;
 
-    ctx.sql(sql).await.unwrap().show().await.unwrap();
+    ctx.sql(sql).await?.show().await?;
 
     let sql = r#"
         select 
@@ -24,5 +27,8 @@ async fn main() {
         from iris 
         limit 50
     "#;
-    ctx.sql(sql).await.unwrap().show().await.unwrap();
+
+    ctx.sql(sql).await?.show().await?;
+
+    Ok(())
 }
