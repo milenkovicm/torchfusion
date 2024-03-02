@@ -28,19 +28,12 @@ AS 'models:/iris@champion'
 so overall flow should be:
 
 ```rust
-let runtime_config = RuntimeConfig::new();
-let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
-let session_config =
-    SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-    .with_function_factory(Arc::new(TorchFunctionFactory {}));
+let ctx = torchfusion::configure_context();
 
-let ctx = SessionContext::new_with_state(state);
-ctx.register_udf(torchfusion::f32_argmax_udf());
+ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default()).await?;
 
-ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default())
-    .await
-    .expect("table to be loaded");
+ctx.sql("SET torch.cuda_device = 0").await?;
+ctx.sql("SET torch.device = cuda").await?;
 
 // we define a torch model to use
 let sql = r#"
@@ -50,17 +43,18 @@ LANGUAGE TORCH
 AS 'model/iris.spt'
 "#;
 
-ctx.sql(sql).await.unwrap().show().await.unwrap();
+ctx.sql(sql).await?.show().await?;
 
 let sql = r#"
     select 
     features, 
-    f32_argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as infered_label, 
+    f32_argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as inferred_label, 
     label as true_label
     from iris 
     limit 50
 "#;
-ctx.sql(sql).await.unwrap().show().await.unwrap();
+
+ctx.sql(sql).await?.show().await?;
 ```
 
 
