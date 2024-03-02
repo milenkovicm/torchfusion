@@ -1,24 +1,6 @@
-use std::sync::Arc;
-
-use datafusion::execution::{
-    config::SessionConfig,
-    context::{SessionContext, SessionState},
-    runtime_env::{RuntimeConfig, RuntimeEnv},
-};
-use torchfusion::TorchFunctionFactory;
-
 #[tokio::main]
 async fn main() {
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
-    let session_config =
-        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-    let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-        .with_function_factory(Arc::new(TorchFunctionFactory {}));
-    let ctx = SessionContext::new_with_state(state);
-
-    // a helper function we need
-    ctx.register_udf(torchfusion::f32_argmax_udf());
+    let ctx = torchfusion::configure_context();
 
     ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default())
         .await

@@ -10,10 +10,12 @@ use datafusion::{
         datatypes::{ArrowPrimitiveType, DataType, Field},
         error::Result,
     },
+    config::{ConfigEntry, ConfigExtension, ExtensionOptions},
     error::DataFusionError,
     execution::{
         config::SessionConfig,
-        context::{FunctionFactory, RegisterFunction},
+        context::{FunctionFactory, RegisterFunction, SessionContext, SessionState},
+        runtime_env::{RuntimeConfig, RuntimeEnv},
     },
     logical_expr::{
         create_udf, ColumnarValue, CreateFunction, DefinitionStatement, ScalarUDF, Volatility,
@@ -247,6 +249,106 @@ fn f32_argmax(values: &[f32]) -> Option<u32> {
         });
 
     result.map(|(pos, _)| pos as u32)
+}
+
+pub fn configure_context() -> SessionContext {
+    let runtime_config = RuntimeConfig::new();
+    let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
+
+    let mut session_config = SessionConfig::new();
+    session_config
+        .options_mut()
+        .extensions
+        .insert(TorchConfig::default());
+    let session_config = session_config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
+        .with_function_factory(Arc::new(TorchFunctionFactory {}));
+    let ctx = SessionContext::new_with_state(state);
+
+    ctx.register_udf(crate::f32_argmax_udf());
+
+    ctx
+}
+
+#[derive(Debug, Clone)]
+pub struct TorchConfig {
+    device: Device,
+    cuda_device: usize,
+}
+
+impl Default for TorchConfig {
+    fn default() -> Self {
+        Self {
+            device: Device::Cpu,
+            cuda_device: 0,
+        }
+    }
+}
+
+impl ExtensionOptions for TorchConfig {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> datafusion::error::Result<()> {
+        match key.to_lowercase().as_str() {
+            "device" => self.device = self.parse_device(value)?,
+            "cuda_device" => {
+                self.cuda_device = value.parse().map_err(|_| {
+                    DataFusionError::Configuration(format!("Cuda device not correct"))
+                })?
+            }
+            key => Err(DataFusionError::Configuration(format!(
+                "No configuration key: {key}"
+            )))?,
+        }
+
+        Ok(())
+    }
+
+    fn entries(&self) -> Vec<datafusion::config::ConfigEntry> {
+        vec![
+            ConfigEntry {
+                key: "device".into(),
+                value: Some(format!("{:?}", self.device)),
+                description: "device to run model on",
+            },
+            ConfigEntry {
+                key: "cuda_device".into(),
+                value: Some(format!("{}", self.cuda_device)),
+                description: "cuda device to use (usize)",
+            },
+        ]
+    }
+}
+
+impl TorchConfig {
+    fn parse_device(&self, value: &str) -> Result<Device> {
+        match value.to_lowercase().as_str() {
+            "cpu" => Ok(Device::Cpu),
+            "cuda" if tch::utils::has_cuda() => Ok(Device::Cuda(self.cuda_device)),
+            "mps" if tch::utils::has_mps() => Ok(Device::Mps),
+            "vulkan" if tch::utils::has_vulkan() => Ok(Device::Vulkan),
+            device => Err(DataFusionError::Configuration(format!(
+                "No support for device: {device}"
+            )))?,
+        }
+    }
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
+impl ConfigExtension for TorchConfig {
+    const PREFIX: &'static str = "torch";
 }
 
 mod test {
