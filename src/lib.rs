@@ -12,15 +12,14 @@ use datafusion::{
     },
     error::DataFusionError,
     execution::{
-        context::{FunctionFactory, SessionState},
-        FunctionRegistry,
+        config::SessionConfig,
+        context::{FunctionFactory, RegisterFunction},
     },
     logical_expr::{
-        create_udf, ColumnarValue, CreateFunction, DropFunction, ScalarUDF, Volatility,
+        create_udf, ColumnarValue, CreateFunction, DefinitionStatement, ScalarUDF, Volatility,
     },
-    sql::sqlparser::ast::FunctionDefinition,
 };
-use parking_lot::RwLock;
+
 use tch::{nn::Module, CModule};
 
 pub struct TorchFunctionFactory {}
@@ -29,9 +28,9 @@ pub struct TorchFunctionFactory {}
 impl FunctionFactory for TorchFunctionFactory {
     async fn create(
         &self,
-        state: Arc<RwLock<SessionState>>,
+        _state: &SessionConfig,
         statement: CreateFunction,
-    ) -> datafusion::error::Result<()> {
+    ) -> datafusion::error::Result<RegisterFunction> {
         let model_name = statement.name;
 
         let data_type = statement
@@ -58,25 +57,14 @@ impl FunctionFactory for TorchFunctionFactory {
         };
 
         let model_file = match statement.params.as_ {
-            Some(FunctionDefinition::DoubleDollarDef(s)) => s,
-            Some(FunctionDefinition::SingleQuotedDef(s)) => s,
-            None => format!("model/{}.spt", model_name),
+            Some(DefinitionStatement::DoubleDollarDef(s)) => s,
+            Some(DefinitionStatement::SingleQuotedDef(s)) => s,
+            _ => format!("model/{}.spt", model_name),
         };
 
         let model_udf = load_torch_model(&model_name, &model_file, data_type)?;
-        state.write().register_udf(Arc::new(model_udf))?;
 
-        Ok(())
-    }
-
-    async fn remove(
-        &self,
-        _state: Arc<RwLock<SessionState>>,
-        _statement: DropFunction,
-    ) -> datafusion::error::Result<()> {
-        // remove is a no-on as session state does not expose
-        // remove_udf currently
-        Ok(())
+        Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
     }
 }
 
