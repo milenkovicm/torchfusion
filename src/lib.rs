@@ -20,7 +20,7 @@ use datafusion::{
     },
 };
 
-use tch::{nn::Module, CModule};
+use tch::{nn::Module, CModule, Device};
 
 pub struct TorchFunctionFactory {}
 
@@ -61,8 +61,8 @@ impl FunctionFactory for TorchFunctionFactory {
             Some(DefinitionStatement::SingleQuotedDef(s)) => s,
             _ => format!("model/{}.spt", model_name),
         };
-
-        let model_udf = load_torch_model(&model_name, &model_file, data_type)?;
+        let device = Device::Cpu;
+        let model_udf = load_torch_model(&model_name, &model_file, data_type, device)?;
 
         Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
     }
@@ -72,7 +72,12 @@ impl FunctionFactory for TorchFunctionFactory {
 /// it has been implemented to demonstrate integration
 ///
 /// do not use it for anything
-pub fn load_torch_model(model_name: &str, model_file: &str, dtype: DataType) -> Result<ScalarUDF> {
+pub fn load_torch_model(
+    model_name: &str,
+    model_file: &str,
+    dtype: DataType,
+    device: Device,
+) -> Result<ScalarUDF> {
     let type_filed = Arc::new(Field::new("item", dtype.clone(), false));
     let type_item = DataType::List(type_filed.clone());
     let type_args = vec![type_item.clone()];
@@ -85,6 +90,17 @@ pub fn load_torch_model(model_name: &str, model_file: &str, dtype: DataType) -> 
 
     let mut model =
         tch::CModule::load(model_file).map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let kind = match &dtype {
+        //DataType::Float16 => tch::Kind::BFloat16
+        DataType::Float32 => tch::Kind::Float,
+        DataType::Float64 => tch::Kind::Double,
+        t => Err(datafusion::error::DataFusionError::Execution(format!(
+            "type not coverd: {}",
+            t
+        )))?,
+    };
+
+    model.to(device, kind, false);
     model
         .f_set_eval()
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
@@ -108,6 +124,7 @@ pub fn load_torch_model(model_name: &str, model_file: &str, dtype: DataType) -> 
                     offsets,
                     &model,
                     type_filed.clone(),
+                    device,
                 )?;
                 Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
             }
@@ -122,11 +139,12 @@ pub fn load_torch_model(model_name: &str, model_file: &str, dtype: DataType) -> 
                     offsets,
                     &model,
                     type_filed.clone(),
+                    device,
                 )?;
                 Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
             }
             m => Err(datafusion::error::DataFusionError::Execution(format!(
-                "no implementation for type: {}",
+                "type not covered: {}",
                 m
             ))),
         }
@@ -150,6 +168,7 @@ fn _call_model<T: ArrowPrimitiveType>(
     offsets: &OffsetBuffer<i32>,
     model: &CModule,
     type_filed: Arc<Field>,
+    device: Device,
 ) -> Result<GenericListArray<i32>>
 where
     <T as ArrowPrimitiveType>::Native: tch::kind::Element,
@@ -163,7 +182,7 @@ where
         // batching should be provided,
         // device selection ...
         let current: &[T::Native] = &values.values()[start..end];
-        let tensor = tch::Tensor::from_slice(current);
+        let tensor = tch::Tensor::from_slice(current).to(device);
         let logits = model.forward(&tensor);
 
         // can we use tensor to convert logits type to result type?

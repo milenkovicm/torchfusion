@@ -37,7 +37,7 @@ async fn main() {
     let sql = r#"
         select 
         features, 
-        f32_argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as infered_label, 
+        f32_argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as inferred_label, 
         label as true_label
         from iris 
         limit 50
