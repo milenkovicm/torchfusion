@@ -3,13 +3,13 @@ use std::{any::Any, sync::Arc};
 use datafusion::{
     arrow::{
         array::{
-            Array, ArrayBuilder, ArrayRef, Float32Builder, Float64Builder, GenericListArray,
-            ListArray, PrimitiveArray, PrimitiveBuilder, UInt32Builder,
+            Array, ArrayBuilder, ArrayRef, Float16Array, Float32Builder, Float64Builder, ListArray,
+            PrimitiveArray, PrimitiveBuilder, UInt32Builder,
         },
         buffer::{OffsetBuffer, ScalarBuffer},
         datatypes::{ArrowPrimitiveType, DataType, Field},
     },
-    common::internal_err,
+    common::{exec_err, internal_err},
     config::{ConfigEntry, ConfigExtension, ExtensionOptions},
     error::{DataFusionError, Result},
     execution::{
@@ -18,12 +18,13 @@ use datafusion::{
         runtime_env::{RuntimeConfig, RuntimeEnv},
     },
     logical_expr::{
-        create_udf, ColumnarValue, CreateFunction, DefinitionStatement, FuncMonotonicity,
-        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+        ColumnarValue, CreateFunction, DefinitionStatement, FuncMonotonicity, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility,
     },
 };
 
-use tch::{nn::Module, CModule, Device};
+use log::debug;
+use tch::{nn::Module, CModule, Device, Kind};
 
 pub struct TorchFunctionFactory {}
 
@@ -36,7 +37,7 @@ impl FunctionFactory for TorchFunctionFactory {
     ) -> datafusion::error::Result<RegisterFunction> {
         let model_name = statement.name;
 
-        let data_type = statement
+        let arg_data_type = statement
             .args
             .map(|a| {
                 a.first()
@@ -45,19 +46,12 @@ impl FunctionFactory for TorchFunctionFactory {
             })
             .unwrap_or(DataType::Float32);
 
-        let data_type = match data_type {
-            // We're interested in array type not the array.
-            // There is discrepancy between array type defined by create function
-            // `List(Field { name: \"field\", data_type: Float32, nullable:  ...``
-            // and arry type defined by create array operation
-            //`[List(Field { name: \"item\", data_type: Float64, nullable: true, ...`
-            // so we just extract bits we need
-            //
-            // In general type handling is very optimistic
-            // at the moment, but good enough for poc
-            DataType::List(f) => f.data_type().clone(),
-            r => r,
-        };
+        let arg_data_type = find_item_type(&arg_data_type);
+
+        let return_data_type = statement
+            .return_type
+            .map(|t| find_item_type(&t))
+            .unwrap_or(arg_data_type.clone());
 
         let model_file = match statement.params.as_ {
             Some(DefinitionStatement::DoubleDollarDef(s)) => s,
@@ -72,9 +66,32 @@ impl FunctionFactory for TorchFunctionFactory {
 
         // same device will be used untill function is dropped
         let device = config.device;
-        let model_udf = load_torch_model(&model_name, &model_file, data_type, device)?;
+        let model_udf = load_torch_model(
+            &model_name,
+            &model_file,
+            device,
+            arg_data_type,
+            return_data_type,
+        )?;
+        debug!("reistering function: [{:?}]", model_udf);
 
         Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
+    }
+}
+
+fn find_item_type(dtype: &DataType) -> DataType {
+    match dtype {
+        // We're interested in array type not the array.
+        // There is discrepancy between array type defined by create function
+        // `List(Field { name: \"field\", data_type: Float32, nullable:  ...``
+        // and arry type defined by create array operation
+        //`[List(Field { name: \"item\", data_type: Float64, nullable: true, ...`
+        // so we just extract bits we need
+        //
+        // In general type handling is very optimistic
+        // at the moment, but good enough for poc
+        DataType::List(f) => f.data_type().clone(),
+        r => r.clone(),
     }
 }
 
@@ -85,132 +102,225 @@ impl FunctionFactory for TorchFunctionFactory {
 pub fn load_torch_model(
     model_name: &str,
     model_file: &str,
-    dtype: DataType,
     device: Device,
+    input_type: DataType,
+    return_type: DataType,
 ) -> Result<ScalarUDF> {
-    let type_filed = Arc::new(Field::new("item", dtype.clone(), false));
-    let type_item = DataType::List(type_filed.clone());
-    let type_args = vec![type_item.clone()];
-    // we should handle return type as defined in function declaration
-    let type_return = Arc::new(type_item.clone());
+    let model_udf = TorchUdf::new_from_file(
+        model_name.to_string(),
+        model_file,
+        device,
+        input_type,
+        return_type,
+    )?;
 
-    //
-    //
-    //
+    Ok(ScalarUDF::from(model_udf))
+}
 
-    let mut model =
-        tch::CModule::load(model_file).map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    let kind = match &dtype {
-        //DataType::Float16 => tch::Kind::BFloat16
-        DataType::Float32 => tch::Kind::Float,
-        DataType::Float64 => tch::Kind::Double,
-        t => Err(datafusion::error::DataFusionError::Execution(format!(
-            "type not coverd: {}",
-            t
-        )))?,
-    };
+#[derive(Debug)]
+struct TorchUdf {
+    name: String,
+    device: Device,
+    model: CModule,
+    signature: Signature,
+    /// type of expected input list (not DataType::List)
+    #[allow(dead_code)]
+    defined_input_type: DataType,
+    /// type of expected result list (not DataType::List)
+    #[allow(dead_code)]
+    defined_return_type: DataType,
+    return_type_filed: Arc<Field>,
+}
 
-    model.to(device, kind, false);
-    model
-        .f_set_eval()
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+impl TorchUdf {
+    fn new_from_file(
+        name: String,
+        model_file: &str,
+        device: Device,
+        input_type: DataType,
+        return_type: DataType,
+    ) -> Result<Self> {
+        let kind = Self::to_torch_type(&input_type)?;
+        let model = Self::load_model(model_file, device, kind)?;
 
-    //
-    //
-    //
+        Ok(Self::new(name, model, device, input_type, return_type))
+    }
 
-    let model_proxy = Arc::new(move |args: &[ColumnarValue]| {
+    fn new(
+        name: String,
+        model: CModule,
+        device: Device,
+        defined_input_type: DataType,
+        defined_return_type: DataType,
+    ) -> Self {
+        let return_type_filed = Arc::new(Field::new("item", defined_return_type.clone(), false));
+        Self {
+            signature: Signature::uniform(
+                1,
+                vec![
+                    // DataType::Float16,
+                    DataType::Float32,
+                    DataType::Float64,
+                    // DataType::Int16,
+                    DataType::Int32,
+                    DataType::Int64,
+                ]
+                .into_iter()
+                .map(|t| DataType::List(Arc::new(Field::new("item", t, false))))
+                .collect::<Vec<_>>(),
+                Volatility::Immutable,
+            ),
+            name,
+            device,
+            model,
+            defined_input_type,
+            defined_return_type,
+            return_type_filed,
+        }
+    }
+
+    fn load_model(model_file: &str, device: Device, kind: Kind) -> Result<CModule> {
+        let mut model = tch::CModule::load(model_file)
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+        model.to(device, kind, false);
+        model
+            .f_set_eval()
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+        Ok(model)
+    }
+}
+
+impl ScalarUDFImpl for TorchUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(self.return_type_filed.clone()))
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         let features = datafusion::common::cast::as_list_array(&args[0])?;
+        let offsets = features.offsets();
 
-        match dtype.clone() {
-            DataType::Float32 => {
-                let values = datafusion::common::cast::as_float32_array(features.values())?;
-                let offsets = features.offsets();
+        let runtime_input_type = Self::item_type(features.data_type())?;
 
-                let array = _call_model(
+        let (result_offsets, values) = match runtime_input_type {
+            DataType::Float16 => {
+                let values = datafusion::common::downcast_value!(features.values(), Float16Array);
+
+                Self::call_model(
                     Float32Builder::new(),
                     values,
                     offsets,
-                    &model,
-                    type_filed.clone(),
-                    device,
-                )?;
-                Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+                    &self.model,
+                    self.device,
+                )?
+            }
+            DataType::Float32 => {
+                let values = datafusion::common::cast::as_float32_array(features.values())?;
+
+                Self::call_model(
+                    Float32Builder::new(),
+                    values,
+                    offsets,
+                    &self.model,
+                    self.device,
+                )?
             }
 
             DataType::Float64 => {
                 let values = datafusion::common::cast::as_float64_array(features.values())?;
-                let offsets = features.offsets();
 
-                let array = _call_model(
+                Self::call_model(
                     Float64Builder::new(),
                     values,
                     offsets,
-                    &model,
-                    type_filed.clone(),
-                    device,
-                )?;
-                Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+                    &self.model,
+                    self.device,
+                )?
             }
-            m => Err(datafusion::error::DataFusionError::Execution(format!(
-                "type not covered: {}",
-                m
-            ))),
-        }
-    });
+            t => exec_err!("Type not covered for infenrence: {t}")?,
+        };
 
-    let model_udf = create_udf(
-        &format!("torch.{}", model_name),
-        type_args,
-        type_return,
-        Volatility::Volatile,
-        model_proxy,
-    );
+        let array = ListArray::new(self.return_type_filed.clone(), result_offsets, values, None);
 
-    Ok(model_udf)
+        Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
+    }
 }
 
-// this should implement better batching , cover corner cases and so on ...
-fn _call_model<T: ArrowPrimitiveType>(
-    mut result: PrimitiveBuilder<T>,
-    values: &PrimitiveArray<T>,
-    offsets: &OffsetBuffer<i32>,
-    model: &CModule,
-    type_filed: Arc<Field>,
-    device: Device,
-) -> Result<GenericListArray<i32>>
-where
-    <T as ArrowPrimitiveType>::Native: tch::kind::Element,
-{
-    let mut result_offsets: Vec<i32> = vec![];
-    result_offsets.push(0);
+impl TorchUdf {
+    #[inline]
+    fn call_model<T: ArrowPrimitiveType, R: ArrowPrimitiveType>(
+        mut result: PrimitiveBuilder<R>,
+        values: &PrimitiveArray<T>,
+        offsets: &OffsetBuffer<i32>,
+        model: &CModule,
+        device: Device,
+    ) -> Result<(
+        OffsetBuffer<i32>,
+        Arc<(dyn datafusion::arrow::array::Array + 'static)>,
+    )>
+    where
+        <T as ArrowPrimitiveType>::Native: tch::kind::Element,
+        <R as ArrowPrimitiveType>::Native: tch::kind::Element,
+    {
+        let mut result_offsets: Vec<i32> = vec![];
+        result_offsets.push(0);
 
-    for o in offsets.windows(2) {
-        let start = o[0] as usize;
-        let end = o[1] as usize;
-        // batching should be provided,
-        // device selection ...
-        let current: &[T::Native] = &values.values()[start..end];
-        let tensor = tch::Tensor::from_slice(current).to(device);
-        let logits = model.forward(&tensor);
+        for o in offsets.windows(2) {
+            let start = o[0] as usize;
+            let end = o[1] as usize;
+            // batching should be provided,
+            // device selection ...
+            let current: &[T::Native] = &values.values()[start..end];
+            let tensor = tch::Tensor::from_slice(current).to(device);
+            let logits = model.forward(&tensor);
 
-        // can we use tensor to convert logits type to result type?
-        let logits = Vec::<T::Native>::try_from(logits)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+            // can we use tensor to convert logits type to result type?
+            let logits = Vec::<R::Native>::try_from(logits)
+                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-        result.append_slice(&logits[..]);
-        result_offsets.push(result.len() as i32);
+            result.append_slice(&logits[..]);
+            result_offsets.push(result.len() as i32);
+        }
+
+        Ok((
+            OffsetBuffer::new(ScalarBuffer::from(result_offsets)),
+            Arc::new(result.finish()) as ArrayRef,
+        ))
     }
 
-    let array = ListArray::new(
-        type_filed.clone(),
-        OffsetBuffer::new(ScalarBuffer::from(result_offsets)),
-        Arc::new(result.finish()),
-        None,
-    );
+    fn item_type(dtype: &DataType) -> Result<&DataType> {
+        match dtype {
+            DataType::List(f) => Ok(f.data_type()),
+            t => exec_err!("input data type not supported {t} expecting a list")?,
+        }
+    }
 
-    Ok(array)
+    fn to_torch_type(dtype: &DataType) -> Result<Kind> {
+        match &dtype {
+            DataType::Boolean => Ok(tch::Kind::Bool),
+            DataType::Int16 => Ok(tch::Kind::Int16),
+            DataType::Int32 => Ok(tch::Kind::Int),
+            DataType::Int64 => Ok(tch::Kind::Int64),
+            DataType::Float16 => Ok(tch::Kind::BFloat16),
+            DataType::Float32 => Ok(tch::Kind::Float),
+            DataType::Float64 => Ok(tch::Kind::Double),
+            t => exec_err!("type not coverd: {t}")?,
+        }
+    }
 }
 
 pub fn configure_context() -> SessionContext {

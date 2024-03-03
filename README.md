@@ -30,10 +30,11 @@ so overall flow should be:
 ```rust
 let ctx = torchfusion::configure_context();
 
-ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default()).await?;
+ctx.register_parquet("iris", "data/iris.snappy.parquet", Default::default())
+    .await?;
 
-ctx.sql("SET torch.cuda_device = 0").await?;
-ctx.sql("SET torch.device = cuda").await?;
+// ctx.sql("SET torch.cuda_device = 0").await?;
+ctx.sql("SET torch.device = cpu").await?;
 
 // we define a torch model to use
 let sql = r#"
@@ -47,26 +48,38 @@ ctx.sql(sql).await?.show().await?;
 
 let sql = r#"
     select 
+    sl, sw, pl, pw,
     features, 
-    argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as inferred_label, 
-    label as true_label
+    argmax(iris(features)) as f_inferred, 
+    argmax(iris([sl, sw, pl, pw])) as inferred, 
+    label as label
     from iris 
     limit 50
 "#;
 
 ctx.sql(sql).await?.show().await?;
+
+Ok(())
 ```
 
+```txt
+++
+++
++-----+-----+-----+-----+----------------------+------------+----------+-------+
+| sl  | sw  | pl  | pw  | features             | f_inferred | inferred | label |
++-----+-----+-----+-----+----------------------+------------+----------+-------+
+| 4.4 | 3.0 | 1.3 | 0.2 | [4.4, 3.0, 1.3, 0.2] | 0          | 0        | 0     |
+| 5.5 | 4.2 | 1.4 | 0.2 | [5.5, 4.2, 1.4, 0.2] | 0          | 0        | 0     |
+| 5.7 | 2.9 | 4.2 | 1.3 | [5.7, 2.9, 4.2, 1.3] | 1          | 1        | 1     |
+| 5.8 | 2.7 | 3.9 | 1.2 | [5.8, 2.7, 3.9, 1.2] | 1          | 1        | 1     |
+| 5.9 | 3.0 | 4.2 | 1.5 | [5.9, 3.0, 4.2, 1.5] | 1          | 1        | 1     |
+| 5.9 | 3.0 | 5.1 | 1.8 | [5.9, 3.0, 5.1, 1.8] | 2          | 2        | 2     |
+| 6.1 | 2.8 | 4.0 | 1.3 | [6.1, 2.8, 4.0, 1.3] | 1          | 1        | 1     |
+| 6.1 | 2.8 | 4.7 | 1.2 | [6.1, 2.8, 4.7, 1.2] | 1          | 1        | 1     |
+| 6.2 | 2.8 | 4.8 | 1.8 | [6.2, 2.8, 4.8, 1.8] | 2          | 2        | 2     |
+| 6.4 | 2.7 | 5.3 | 1.9 | [6.4, 2.7, 5.3, 1.9] | 2          | 2        | 2     |
+| 6.4 | 3.2 | 4.5 | 1.5 | [6.4, 3.2, 4.5, 1.5] | 1          | 1        | 1     |
++-----+-----+-----+-----+----------------------+------------+----------+-------+
+ *  Terminal will be reused by tasks, press any key to close it. 
 
-## What else can be implemented using `FunctionFactory`
-
-`FunctionFactory` is an extension point, a SQL defined functions like
-
-```sql
-CREATE FUNCTION add(BIGINT, BIGINT)
-RETURNS BIGINT
-LANGUAGE SQL
-RETURN $1 + $2
 ```
-
-would be easy to implement. In addition to `FunctionFactory` a `AnalyzerRule` should be implemented, which can alter logical plan.

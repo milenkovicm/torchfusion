@@ -20,9 +20,11 @@ async fn main() -> datafusion::error::Result<()> {
 
     let sql = r#"
         select 
+        sl, sw, pl, pw,
         features, 
-        argmax(torch.iris([cast(sl as double),cast(sw as double),cast(pl as double),cast(pw as double)])) as inferred_label, 
-        label as true_label
+        argmax(iris(features)) as f_inferred, 
+        argmax(iris([sl, sw, pl, pw])) as inferred, 
+        label as label
         from iris 
         limit 50
     "#;
