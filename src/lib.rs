@@ -1,13 +1,13 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, fmt::Debug, marker::PhantomData, sync::Arc};
 
 use datafusion::{
     arrow::{
         array::{
-            Array, ArrayBuilder, ArrayRef, Float16Array, Float32Builder, Float64Builder, ListArray,
-            PrimitiveArray, PrimitiveBuilder, UInt32Builder,
+            Array, ArrayBuilder, ArrayRef, Float16Array, ListArray, PrimitiveArray,
+            PrimitiveBuilder, UInt32Builder,
         },
         buffer::{OffsetBuffer, ScalarBuffer},
-        datatypes::{ArrowPrimitiveType, DataType, Field},
+        datatypes::{ArrowPrimitiveType, DataType, Field, Float32Type},
     },
     common::{exec_err, internal_err},
     config::{ConfigEntry, ConfigExtension, ExtensionOptions},
@@ -73,7 +73,7 @@ impl FunctionFactory for TorchFunctionFactory {
             arg_data_type,
             return_data_type,
         )?;
-        debug!("reistering function: [{:?}]", model_udf);
+        debug!("Reistering function: [{:?}]", model_udf);
 
         Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
     }
@@ -106,7 +106,10 @@ pub fn load_torch_model(
     input_type: DataType,
     return_type: DataType,
 ) -> Result<ScalarUDF> {
-    let model_udf = TorchUdf::new_from_file(
+    // TODO: create this based on return type
+    //       define which types are supported,
+    //       & handle them 
+    let model_udf = TorchUdf::<Float32Type>::new_from_file(
         model_name.to_string(),
         model_file,
         device,
@@ -118,7 +121,7 @@ pub fn load_torch_model(
 }
 
 #[derive(Debug)]
-struct TorchUdf {
+struct TorchUdf<R: ArrowPrimitiveType + Debug> {
     name: String,
     device: Device,
     model: CModule,
@@ -130,9 +133,10 @@ struct TorchUdf {
     #[allow(dead_code)]
     defined_return_type: DataType,
     return_type_filed: Arc<Field>,
+    phantom: PhantomData<R>,
 }
 
-impl TorchUdf {
+impl<R: ArrowPrimitiveType + Debug> TorchUdf<R> {
     fn new_from_file(
         name: String,
         model_file: &str,
@@ -155,6 +159,7 @@ impl TorchUdf {
     ) -> Self {
         let return_type_filed = Arc::new(Field::new("item", defined_return_type.clone(), false));
         Self {
+            // TODO: is uniform signature required
             signature: Signature::uniform(
                 1,
                 vec![
@@ -176,6 +181,7 @@ impl TorchUdf {
             defined_input_type,
             defined_return_type,
             return_type_filed,
+            phantom: PhantomData,
         }
     }
 
@@ -192,7 +198,10 @@ impl TorchUdf {
     }
 }
 
-impl ScalarUDFImpl for TorchUdf {
+impl<R: ArrowPrimitiveType + Debug + Send + Sync> ScalarUDFImpl for TorchUdf<R>
+where
+    <R as ArrowPrimitiveType>::Native: tch::kind::Element,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -212,16 +221,17 @@ impl ScalarUDFImpl for TorchUdf {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
         let features = datafusion::common::cast::as_list_array(&args[0])?;
+
         let offsets = features.offsets();
 
+        // TODO: do we need to do runtime reflection ?
         let runtime_input_type = Self::item_type(features.data_type())?;
 
         let (result_offsets, values) = match runtime_input_type {
             DataType::Float16 => {
                 let values = datafusion::common::downcast_value!(features.values(), Float16Array);
-
                 Self::call_model(
-                    Float32Builder::new(),
+                    PrimitiveBuilder::<R>::new(),
                     values,
                     offsets,
                     &self.model,
@@ -232,7 +242,7 @@ impl ScalarUDFImpl for TorchUdf {
                 let values = datafusion::common::cast::as_float32_array(features.values())?;
 
                 Self::call_model(
-                    Float32Builder::new(),
+                    PrimitiveBuilder::<R>::new(),
                     values,
                     offsets,
                     &self.model,
@@ -244,7 +254,7 @@ impl ScalarUDFImpl for TorchUdf {
                 let values = datafusion::common::cast::as_float64_array(features.values())?;
 
                 Self::call_model(
-                    Float64Builder::new(),
+                    PrimitiveBuilder::<R>::new(),
                     values,
                     offsets,
                     &self.model,
@@ -260,9 +270,9 @@ impl ScalarUDFImpl for TorchUdf {
     }
 }
 
-impl TorchUdf {
+impl<R: ArrowPrimitiveType + Debug> TorchUdf<R> {
     #[inline]
-    fn call_model<T: ArrowPrimitiveType, R: ArrowPrimitiveType>(
+    fn call_model<T: ArrowPrimitiveType>(
         mut result: PrimitiveBuilder<R>,
         values: &PrimitiveArray<T>,
         offsets: &OffsetBuffer<i32>,
@@ -305,7 +315,7 @@ impl TorchUdf {
     fn item_type(dtype: &DataType) -> Result<&DataType> {
         match dtype {
             DataType::List(f) => Ok(f.data_type()),
-            t => exec_err!("input data type not supported {t} expecting a list")?,
+            t => exec_err!("Input data type not supported {t}, expecting a list")?,
         }
     }
 
