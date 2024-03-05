@@ -13,9 +13,9 @@ use datafusion::{
 use tch::{nn::Module, CModule, Device, Kind};
 
 /// very opiniated torch model integration
-/// it has been implemented to demonstrate integration 
+/// it has been implemented to demonstrate integration
 /// with datafusion as user defined function.
-/// 
+///
 /// do not use it for anything
 
 pub fn load_torch_model(
