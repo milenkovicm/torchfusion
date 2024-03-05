@@ -18,6 +18,7 @@ mod udf;
 pub use argmax::*;
 pub use config::*;
 
+#[derive(Default, Debug)]
 pub struct TorchFunctionFactory {}
 
 #[async_trait::async_trait]
@@ -88,17 +89,21 @@ fn find_item_type(dtype: &DataType) -> DataType {
 }
 
 pub fn configure_context() -> SessionContext {
-    let runtime_config = RuntimeConfig::new();
-    let runtime_environment = RuntimeEnv::new(runtime_config).unwrap();
+    let runtime_environment = RuntimeEnv::new(RuntimeConfig::new()).unwrap();
 
     let mut session_config = SessionConfig::new();
+
     session_config
         .options_mut()
         .extensions
+        // register torch factory configuration
         .insert(TorchConfig::default());
-    let session_config = session_config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+
+    // let session_config = session_config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
     let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-        .with_function_factory(Arc::new(TorchFunctionFactory {}));
+        // register  factory configuration
+        .with_function_factory(Arc::new(TorchFunctionFactory::default()));
+
     let ctx = SessionContext::new_with_state(state);
 
     ctx.register_udf(ScalarUDF::from(crate::ArgMax::new()));
