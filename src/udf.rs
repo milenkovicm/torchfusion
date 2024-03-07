@@ -22,6 +22,7 @@ pub fn load_torch_model(
     model_name: &str,
     model_file: &str,
     device: Device,
+    non_blocking: bool,
     // we need this two guys
     input_type: DataType,
     return_type: DataType,
@@ -32,6 +33,7 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
+                non_blocking,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
@@ -41,6 +43,7 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
+                non_blocking,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
@@ -50,6 +53,7 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
+                non_blocking,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
@@ -92,12 +96,13 @@ impl<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> TorchUdf<I, R
         name: String,
         model_file: &str,
         device: Device,
+        non_blocking: bool,
         //input_type: DataType,
         //return_type: DataType,
     ) -> Result<Self> {
         //R::DATA_TYPE
         let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
-        let model = Self::load_model(model_file, device, kind)?;
+        let model = Self::load_model(model_file, device, kind, non_blocking)?;
 
         Ok(Self::new(name, model, device))
     }
@@ -130,11 +135,16 @@ impl<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> TorchUdf<I, R
         }
     }
 
-    fn load_model(model_file: &str, device: Device, kind: Kind) -> Result<CModule> {
+    fn load_model(
+        model_file: &str,
+        device: Device,
+        kind: Kind,
+        non_blocking: bool,
+    ) -> Result<CModule> {
         let mut model = tch::CModule::load(model_file)
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-        model.to(device, kind, false);
+        model.to(device, kind, non_blocking);
         model
             .f_set_eval()
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;

@@ -59,14 +59,17 @@ impl FunctionFactory for TorchFunctionFactory {
 
         // same device will be used untill function is dropped
         let device = config.device();
+        let non_blocking = config.model_non_blocking();
         let model_udf = udf::load_torch_model(
             &model_name,
             &model_file,
             device,
+            non_blocking,
             data_type_input,
             data_type_return,
         )?;
-        debug!("Reistering function: [{:?}]", model_udf);
+
+        debug!("Registering function: [{:?}]", model_udf);
 
         Ok(RegisterFunction::Scalar(Arc::new(model_udf)))
     }
@@ -91,7 +94,7 @@ fn find_item_type(dtype: &DataType) -> DataType {
 pub fn configure_context() -> SessionContext {
     let runtime_environment = RuntimeEnv::new(RuntimeConfig::new()).unwrap();
 
-    let mut session_config = SessionConfig::new();
+    let mut session_config = SessionConfig::new().with_information_schema(true);
 
     session_config
         .options_mut()

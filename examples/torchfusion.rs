@@ -14,7 +14,15 @@ async fn main() -> datafusion::error::Result<()> {
         .show()
         .await?;
 
-    // definition of torch model to use
+    // we can list all supported configuration parameters
+    // if information schema is enabled.
+    ctx.sql("SELECT * FROM information_schema.df_settings WHERE NAME LIKE 'torch%'")
+        .await?
+        .show()
+        .await?;
+
+    // torch model to use
+    //
     let sql = r#"
         CREATE FUNCTION iris(FLOAT[])
         RETURNS FLOAT[]
