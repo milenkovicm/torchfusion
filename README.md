@@ -37,7 +37,7 @@ let sql = r#"
 ctx.sql(sql).await?.show().await?;
 
 // ctx.sql("SET torch.cuda_device = 0").await?;
-ctx.sql("SET torch.device = cpu").await?.show().await?;
+ctx.sql("SET torchfusion.device = cpu").await?.show().await?;
 
 // definition of torch model to use
 let sql = r#"

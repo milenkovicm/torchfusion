@@ -52,12 +52,12 @@ impl ExtensionOptions for TorchConfig {
     fn entries(&self) -> Vec<datafusion::config::ConfigEntry> {
         vec![
             ConfigEntry {
-                key: "device".into(),
+                key: format!("{}.device", Self::PREFIX),
                 value: Some(format!("{:?}", self.device)),
                 description: "Device to run model on. Valid values 'cpu', 'cuda', 'mps', 'vulkan'. Default: 'cpu' ",
             },
             ConfigEntry {
-                key: "cuda_device".into(),
+                key: format!("{}.cuda_device", Self::PREFIX),
                 value: Some(format!("{}", self.cuda_device)),
                 description: "Cuda device to use. Valid value positive integer. Default: 0",
             },
@@ -83,5 +83,5 @@ impl TorchConfig {
 }
 
 impl ConfigExtension for TorchConfig {
-    const PREFIX: &'static str = "torch";
+    const PREFIX: &'static str = "torchfusion";
 }
