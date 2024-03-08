@@ -1,5 +1,3 @@
-use std::{any::Any, fmt::Debug, marker::PhantomData, sync::Arc};
-
 use datafusion::{
     arrow::{
         array::{Array, ArrayBuilder, ArrayRef, ListArray, PrimitiveArray, PrimitiveBuilder},
@@ -10,9 +8,10 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility},
 };
-use tch::{nn::Module, CModule, Device, Kind};
+use std::{any::Any, fmt::Debug, marker::PhantomData, sync::Arc};
+use tch::{nn::Module, CModule, Device, Kind, Tensor};
 
-/// very opiniated torch model integration
+/// Very opiniated torch model integration
 /// it has been implemented to demonstrate integration
 /// with datafusion as user defined function.
 ///
@@ -23,7 +22,7 @@ pub fn load_torch_model(
     model_file: &str,
     device: Device,
     non_blocking: bool,
-    // we need this two guys
+    batch_size: usize,
     input_type: DataType,
     return_type: DataType,
 ) -> Result<ScalarUDF> {
@@ -34,6 +33,7 @@ pub fn load_torch_model(
                 model_file,
                 device,
                 non_blocking,
+                batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
@@ -44,6 +44,7 @@ pub fn load_torch_model(
                 model_file,
                 device,
                 non_blocking,
+                batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
@@ -54,70 +55,56 @@ pub fn load_torch_model(
                 model_file,
                 device,
                 non_blocking,
+                batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
         }
         // we can add few more later
         (i, r) => exec_err!(
-            "data type combination not supported args: {}, return: {}",
+            "Data type combination not supported! args: {}, return: {}",
             i,
             r
         )?,
     }
-
-    // let model_udf = TorchUdf::<Float32Type, Float32Type>::new_from_file(
-    //     model_name.to_string(),
-    //     model_file,
-    //     device,
-    // )?;
-
-    //Ok(ScalarUDF::from(model_udf))
 }
 
 #[derive(Debug)]
-struct TorchUdf<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> {
+struct TorchUdf<I, R>
+where
+    I: ArrowPrimitiveType + Debug,
+    R: ArrowPrimitiveType + Debug,
+{
+    batch_size: usize,
     name: String,
     device: Device,
     model: CModule,
     signature: Signature,
-    /// type of expected input list (not DataType::List)
-    //#[allow(dead_code)]
-    //defined_input_type: DataType,
-    /// type of expected result list (not DataType::List)
-    //#[allow(dead_code)]
-    //defined_return_type: DataType,
     return_type_filed: Arc<Field>,
     phantom_i: PhantomData<I>,
     phantom_r: PhantomData<R>,
 }
 
-impl<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> TorchUdf<I, R> {
+impl<I, R> TorchUdf<I, R>
+where
+    I: ArrowPrimitiveType + Debug,
+    R: ArrowPrimitiveType + Debug,
+{
     fn new_from_file(
         name: String,
         model_file: &str,
         device: Device,
         non_blocking: bool,
-        //input_type: DataType,
-        //return_type: DataType,
+        batch_size: usize,
     ) -> Result<Self> {
-        //R::DATA_TYPE
         let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
         let model = Self::load_model(model_file, device, kind, non_blocking)?;
 
-        Ok(Self::new(name, model, device))
+        Ok(Self::new(name, model, device, batch_size))
     }
 
-    fn new(
-        name: String,
-        model: CModule,
-        device: Device,
-        //defined_input_type: DataType,
-        //defined_return_type: DataType,
-    ) -> Self {
+    fn new(name: String, model: CModule, device: Device, batch_size: usize) -> Self {
         let return_type_filed = Arc::new(Field::new("item", R::DATA_TYPE.clone(), false));
         Self {
-            // TODO: is uniform signature required
-            //       no it is not, revert back to exact
             signature: Signature::exact(
                 vec![DataType::List(Arc::new(Field::new(
                     "item",
@@ -127,6 +114,7 @@ impl<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> TorchUdf<I, R
                 Volatility::Immutable,
             ),
             name,
+            batch_size,
             device,
             model,
             return_type_filed,
@@ -153,9 +141,10 @@ impl<I: ArrowPrimitiveType + Debug, R: ArrowPrimitiveType + Debug> TorchUdf<I, R
     }
 }
 
-impl<R: ArrowPrimitiveType + Debug + Send + Sync, I: ArrowPrimitiveType + Debug + Send + Sync>
-    ScalarUDFImpl for TorchUdf<R, I>
+impl<R, I> ScalarUDFImpl for TorchUdf<R, I>
 where
+    R: ArrowPrimitiveType + Debug + Send + Sync,
+    I: ArrowPrimitiveType + Debug + Send + Sync,
     <R as ArrowPrimitiveType>::Native: tch::kind::Element,
     <I as ArrowPrimitiveType>::Native: tch::kind::Element,
 {
@@ -183,12 +172,13 @@ where
 
         let (result_offsets, values) = {
             let values = downcast_value!(features.values(), PrimitiveArray, I);
-            Self::call_model(
+            Self::_call_model(
                 PrimitiveBuilder::<R>::new(),
                 values,
                 offsets,
                 &self.model,
                 self.device,
+                self.batch_size,
             )?
         };
         let array = ListArray::new(self.return_type_filed.clone(), result_offsets, values, None);
@@ -197,40 +187,101 @@ where
     }
 }
 
-impl<R: ArrowPrimitiveType + Debug, I: ArrowPrimitiveType + Debug> TorchUdf<R, I> {
+// consider creating iterator from this method
+impl<R, I> TorchUdf<R, I>
+where
+    R: ArrowPrimitiveType + Debug,
+    I: ArrowPrimitiveType + Debug,
+{
+    fn create_batched_tensor<T>(
+        start_offset: usize,
+        batch_size: usize,
+        values: &PrimitiveArray<T>,
+        offsets: &OffsetBuffer<i32>,
+        device: Device,
+    ) -> Option<(Tensor, usize, usize)>
+    where
+        T: ArrowPrimitiveType,
+        <T as ArrowPrimitiveType>::Native: tch::kind::Element,
+    {
+        let end_offset = std::cmp::min(start_offset + batch_size, offsets.len() - 1);
+        if end_offset <= start_offset {
+            return None;
+        } else {
+            let index_start = offsets[start_offset] as usize;
+            let index_end = offsets[end_offset] as usize;
+            let total_items = end_offset - start_offset;
+
+            let current: &[T::Native] = &values.values()[index_start..index_end];
+            let tensor = tch::Tensor::from_slice(current)
+                .view([total_items as i64, -1])
+                .to(device);
+
+            // total_items are not required as it can be extracted
+            // from tensor. to extract it a bit of gimnastics is needed
+            // so it was easier to just return it.
+            // total_items are needed as we cant expect
+            // to have batches alligned with inputs
+            Some((tensor, end_offset, total_items))
+        }
+    }
+
+    fn flatten_batched_tensor(
+        tensor: Tensor,
+        items: usize,
+        result_offsets: &mut Vec<i32>,
+        result: &mut PrimitiveBuilder<R>,
+    ) -> Result<()>
+    where
+        <R as ArrowPrimitiveType>::Native: tch::kind::Element,
+    {
+        let start = result.len();
+
+        // not sure if .contiguous() is needed
+        let tensor = tensor.contiguous().view(-1);
+        let logits = Vec::<R::Native>::try_from(tensor)
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+        result.append_slice(&logits[..]);
+        let end = result.len();
+        let elements = (end - start) / items;
+
+        // populate resulting offsets from result
+        (1..=items).for_each(|i| result_offsets.push((start + i * elements) as i32));
+
+        Ok(())
+    }
+
     #[inline]
-    fn call_model<T: ArrowPrimitiveType>(
+    fn _call_model<T>(
         mut result: PrimitiveBuilder<R>,
         values: &PrimitiveArray<T>,
         offsets: &OffsetBuffer<i32>,
         model: &CModule,
         device: Device,
+        batch_size: usize,
     ) -> Result<(
         OffsetBuffer<i32>,
         Arc<(dyn datafusion::arrow::array::Array + 'static)>,
     )>
     where
+        T: ArrowPrimitiveType,
         <T as ArrowPrimitiveType>::Native: tch::kind::Element,
         <R as ArrowPrimitiveType>::Native: tch::kind::Element,
     {
         let mut result_offsets: Vec<i32> = vec![];
         result_offsets.push(0);
+        let mut start = 0;
 
-        for o in offsets.windows(2) {
-            let start = o[0] as usize;
-            let end = o[1] as usize;
-            // batching should be provided,
-            // device selection ...
-            let current: &[T::Native] = &values.values()[start..end];
-            let tensor = tch::Tensor::from_slice(current).to(device);
+        while let Some((tensor, next_start, no_items)) =
+            // this would make more sense if we return iterator
+            Self::create_batched_tensor(start, batch_size, values, offsets, device)
+        {
+            start = next_start;
+
             let logits = model.forward(&tensor);
 
-            // can we use tensor to convert logits type to result type?
-            let logits = Vec::<R::Native>::try_from(logits)
-                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-            result.append_slice(&logits[..]);
-            result_offsets.push(result.len() as i32);
+            Self::flatten_batched_tensor(logits, no_items, &mut result_offsets, &mut result)?;
         }
 
         Ok((
@@ -238,13 +289,6 @@ impl<R: ArrowPrimitiveType + Debug, I: ArrowPrimitiveType + Debug> TorchUdf<R, I
             Arc::new(result.finish()) as ArrayRef,
         ))
     }
-
-    // fn item_type(dtype: &DataType) -> Result<&DataType> {
-    //     match dtype {
-    //         DataType::List(f) => Ok(f.data_type()),
-    //         t => exec_err!("Input data type not supported {t}, expecting a list")?,
-    //     }
-    // }
 
     fn to_torch_type(dtype: &DataType) -> Result<Kind> {
         match &dtype {
@@ -255,7 +299,118 @@ impl<R: ArrowPrimitiveType + Debug, I: ArrowPrimitiveType + Debug> TorchUdf<R, I
             DataType::Float16 => Ok(tch::Kind::BFloat16),
             DataType::Float32 => Ok(tch::Kind::Float),
             DataType::Float64 => Ok(tch::Kind::Double),
-            t => exec_err!("type not coverd: {t}")?,
+            t => exec_err!("Data type not supported: {t}")?,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::TorchUdf;
+    use datafusion::arrow::{
+        array::{Int32Array, Int32Builder},
+        buffer::{OffsetBuffer, ScalarBuffer},
+        datatypes::Int32Type,
+    };
+    use tch::Tensor;
+
+    #[test]
+    fn should_create_tensor() {
+        let values = Int32Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]);
+
+        let offsets = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+        let device = tch::Device::Cpu;
+        let batch_size = 3;
+        let mut current_end = 0;
+
+        if let Some((tensor, end, _total)) = TorchUdf::<Int32Type, Int32Type>::create_batched_tensor(
+            current_end,
+            batch_size,
+            &values,
+            &offsets,
+            device,
+        ) {
+            current_end += end;
+            assert_eq!(vec![3, 2], tensor.size());
+        }
+
+        if let Some((tensor, end, _total)) = TorchUdf::<Int32Type, Int32Type>::create_batched_tensor(
+            current_end,
+            batch_size,
+            &values,
+            &offsets,
+            device,
+        ) {
+            current_end += end;
+            assert_eq!(vec![3, 2], tensor.size());
+        }
+
+        if let Some((tensor, _end, _total)) =
+            TorchUdf::<Int32Type, Int32Type>::create_batched_tensor(
+                current_end,
+                batch_size,
+                &values,
+                &offsets,
+                device,
+            )
+        {
+            assert_eq!(vec![2, 2], tensor.size());
+        }
+
+        let result = TorchUdf::<Int32Type, Int32Type>::create_batched_tensor(
+            current_end,
+            batch_size,
+            &values,
+            &offsets,
+            device,
+        );
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn should_flatten_tensor_0() {
+        let mut result = Int32Builder::new();
+        let mut result_offsets: Vec<i32> = vec![];
+        result_offsets.push(0);
+
+        let tensor =
+            Tensor::from_slice2(&[[1, 2, 3], [11, 22, 33], [111, 222, 333], [1111, 2222, 3333]]);
+
+        TorchUdf::<Int32Type, Int32Type>::flatten_batched_tensor(
+            tensor,
+            4,
+            &mut result_offsets,
+            &mut result,
+        )
+        .expect("no errors");
+        let result = result.finish();
+
+        assert_eq!(vec![0, 3, 6, 9, 12], result_offsets);
+        assert_eq!(
+            [1, 2, 3, 11, 22, 33, 111, 222, 333, 1111, 2222, 3333],
+            result.values()[..]
+        )
+    }
+
+    #[test]
+    fn should_flatten_tensor_1() {
+        let mut result_offsets: Vec<i32> = vec![];
+        result_offsets.push(0);
+        let tensor = Tensor::from_slice2(&[[1, 2], [11, 22]]);
+
+        let mut result = Int32Builder::new();
+        TorchUdf::<Int32Type, Int32Type>::flatten_batched_tensor(
+            tensor,
+            2,
+            &mut result_offsets,
+            &mut result,
+        )
+        .expect("no errors");
+        let result = result.finish();
+
+        assert_eq!(vec![0, 2, 4], result_offsets);
+        assert_eq!([1, 2, 11, 22], result.values()[..])
     }
 }

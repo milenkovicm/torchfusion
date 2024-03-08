@@ -60,11 +60,13 @@ impl FunctionFactory for TorchFunctionFactory {
         // same device will be used untill function is dropped
         let device = config.device();
         let non_blocking = config.model_non_blocking();
+        let batch_size = config.batch_size();
         let model_udf = udf::load_torch_model(
             &model_name,
             &model_file,
             device,
             non_blocking,
+            batch_size,
             data_type_input,
             data_type_return,
         )?;
@@ -112,4 +114,45 @@ pub fn configure_context() -> SessionContext {
     ctx.register_udf(ScalarUDF::from(crate::ArgMax::new()));
 
     ctx
+}
+#[cfg(test)]
+mod test {
+    use datafusion::error::Result;
+
+    #[tokio::test]
+    async fn e2e() -> Result<()> {
+        let ctx = crate::configure_context();
+
+        let sql = r#"
+        CREATE EXTERNAL TABLE iris 
+        STORED AS PARQUET 
+        LOCATION 'data/iris.snappy.parquet';
+        "#;
+
+        ctx.sql(sql).await?.show().await?;
+
+        let sql = r#"
+        CREATE FUNCTION iris(FLOAT[])
+        RETURNS FLOAT[]
+        LANGUAGE TORCH
+        AS 'model/iris.spt'
+        "#;
+
+        ctx.sql(sql).await?.show().await?;
+
+        let sql = r#"
+        SELECT 
+        sl, sw, pl, pw,
+        features, 
+        argmax(iris(features)) as f_inferred, 
+        argmax(iris([sl, sw, pl, pw])) as inferred, 
+        label
+        FROM iris 
+        LIMIT 50
+        "#;
+
+        ctx.sql(sql).await?.show().await?;
+
+        Ok(())
+    }
 }
