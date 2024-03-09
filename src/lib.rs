@@ -117,7 +117,7 @@ pub fn configure_context() -> SessionContext {
 }
 #[cfg(test)]
 mod test {
-    use datafusion::error::Result;
+    use datafusion::{assert_batches_eq, error::Result};
 
     #[tokio::test]
     async fn e2e() -> Result<()> {
@@ -129,7 +129,7 @@ mod test {
         LOCATION 'data/iris.snappy.parquet';
         "#;
 
-        ctx.sql(sql).await?.show().await?;
+        ctx.sql(sql).await?.collect().await?;
 
         let sql = r#"
         CREATE FUNCTION iris(FLOAT[])
@@ -138,21 +138,40 @@ mod test {
         AS 'model/iris.spt'
         "#;
 
-        ctx.sql(sql).await?.show().await?;
+        ctx.sql(sql).await?.collect().await?;
 
         let sql = r#"
         SELECT 
-        sl, sw, pl, pw,
-        features, 
         argmax(iris(features)) as f_inferred, 
-        argmax(iris([sl, sw, pl, pw])) as inferred, 
-        label
+        argmax(iris([sl, sw, pl, pw])) as inferred
         FROM iris 
-        LIMIT 50
+        LIMIT 15
         "#;
 
-        ctx.sql(sql).await?.show().await?;
+        let expected = vec![
+            "+------------+----------+",
+            "| f_inferred | inferred |",
+            "+------------+----------+",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 1          | 1        |",
+            "+------------+----------+",
+        ];
 
+        let result = ctx.sql(sql).await?.collect().await?;
+        assert_batches_eq!(expected, &result);
         Ok(())
     }
 }

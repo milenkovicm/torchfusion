@@ -84,3 +84,27 @@ ctx.sql(sql).await?.show().await?;
 | 6.4 | 3.2 | 4.5 | 1.5 | [6.4, 3.2, 4.5, 1.5] | 1          | 1        | 1     |
 +-----+-----+-----+-----+----------------------+------------+----------+-------+
 ```
+
+## Available Configuration 
+
+`FunctionFactor` exposes set of configuraiton options which can be retrieved quering system catalog:
+
+```sql
+SELECT * FROM information_schema.df_settings WHERE NAME LIKE 'torchfusion%'
+```
+
+```txt
++--------------------------------+-------+--------------------------------------------------------------------------------------+
+| name                           | value | description                                                                          |
++--------------------------------+-------+--------------------------------------------------------------------------------------+
+| torchfusion.device             | Cpu   | Device to run model on. Valid values 'cpu', 'cuda', 'mps', 'vulkan'. Default: 'cpu'  |
+| torchfusion.cuda_device        | 0     | Cuda device to use. Valid value positive integer. Default: 0                         |
+| torchfusion.model_non_blocking | false | Non-blocking memory transfer. Valid value boolean. Default: false                    |
+| torchfusion.batch_size         | 1     | Batch size to be used. Valid value positive non-zero integers. Default: 1            |
++--------------------------------+-------+--------------------------------------------------------------------------------------+
+```
+Available configuration options can be changed:
+
+```sql
+SET torchfusion.device = cpu
+```

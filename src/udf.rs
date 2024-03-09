@@ -97,8 +97,13 @@ where
         batch_size: usize,
     ) -> Result<Self> {
         let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
-        let model = Self::load_model(model_file, device, kind, non_blocking)?;
 
+        let model = Self::load_model(model_file, device, kind, non_blocking)?;
+        // TODO: at this point we can veirfy that input and output layers
+        //       have the same types like function input and output
+        //
+        // model.named_parameters()
+        //
         Ok(Self::new(name, model, device, batch_size))
     }
 
@@ -206,7 +211,7 @@ where
     {
         let end_offset = std::cmp::min(start_offset + batch_size, offsets.len() - 1);
         if end_offset <= start_offset {
-            return None;
+            None
         } else {
             let index_start = offsets[start_offset] as usize;
             let index_end = offsets[end_offset] as usize;
