@@ -2,12 +2,12 @@
 name = "torchfusion"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 tokio = { version = "^1.36", features = ["rt-multi-thread"]}
 # datafusion = { version = "36" }
-# datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", branch = "create_function_factory" }
-datafusion = { git = "https://github.com/milenkovicm/arrow-datafusion-fork.git", rev="00b8058" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="451d13a" }
 thiserror = { version = "1.0"}
 log = { version = "0.4" }
 tch = { version = "0.15", features = ["download-libtorch"] }
