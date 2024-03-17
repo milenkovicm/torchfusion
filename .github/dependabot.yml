@@ -19,3 +19,7 @@ updates:
         patterns:
           - "datafusion*" 
           - "datafusion-*" 
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
