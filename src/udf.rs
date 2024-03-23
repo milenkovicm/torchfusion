@@ -11,7 +11,7 @@ use datafusion::{
 use std::{any::Any, fmt::Debug, marker::PhantomData, sync::Arc};
 use tch::{nn::Module, CModule, Device, Kind, Tensor};
 
-/// Very opiniated torch model integration
+/// Very opiated torch model integration
 /// it has been implemented to demonstrate integration
 /// with datafusion as user defined function.
 ///
@@ -99,7 +99,7 @@ where
         let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
 
         let model = Self::load_model(model_file, device, kind, non_blocking)?;
-        // TODO: at this point we can veirfy that input and output layers
+        // TODO: at this point we can verify that input and output layers
         //       have the same types like function input and output
         //
         // model.named_parameters()
@@ -223,10 +223,10 @@ where
                 .to(device);
 
             // total_items are not required as it can be extracted
-            // from tensor. to extract it a bit of gimnastics is needed
+            // from tensor. to extract it a bit of gymnastics is needed
             // so it was easier to just return it.
             // total_items are needed as we cant expect
-            // to have batches alligned with inputs
+            // to have batches aligned with inputs
             Some((tensor, end_offset, total_items))
         }
     }

@@ -89,7 +89,7 @@ impl ScalarUDFImpl for ArgMax {
                 let values = datafusion::common::cast::as_int64_array(features.values())?;
                 Self::find_max(values, offsets)
             }
-            t => internal_err!("Unsuported type {t}")?,
+            t => internal_err!("Unsupported type {t}")?,
         }
     }
 

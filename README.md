@@ -1,6 +1,9 @@
 # TorchFusion
 
-Torchfusion is an very opiniated torch and datafusion integration, implemented to demonstrate datafusion `FunctionFactory` functionality merge request ([arrow-datafusion/pull#9333](https://github.com/apache/arrow-datafusion/pull/9333)). It has not been envisaged as a activly maintained library.
+Torchfusion is an very opiniated torch and datafusion integration, implemented to demonstrate datafusion `FunctionFactory` functionality merge request ([arrow-datafusion/pull#9333](https://github.com/apache/arrow-datafusion/pull/9333)).
+
+> [!NOTE]
+> It has not been envisaged as a actively maintained library.
 
 ## How to use
 
@@ -13,8 +16,8 @@ LANGUAGE TORCH
 AS '/models/iris.pt'
 ```
 
-Where function parameter defines type of input array and return type defines type of return array. 
-Return statement points to locaton where scripted model file is located.
+Where function parameter defines type of input array and return type defines type of return array.
+Return statement points to location where scripted model file is located.
 
 or, something which is not implemented in this example, referencing a model in MlFlow repository:
 
@@ -64,10 +67,6 @@ ctx.sql(sql).await?.show().await?;
 ```
 
 ```txt
-++
-++
-++
-++
 +-----+-----+-----+-----+----------------------+------------+----------+-------+
 | sl  | sw  | pl  | pw  | features             | f_inferred | inferred | label |
 +-----+-----+-----+-----+----------------------+------------+----------+-------+
@@ -85,7 +84,7 @@ ctx.sql(sql).await?.show().await?;
 +-----+-----+-----+-----+----------------------+------------+----------+-------+
 ```
 
-## Available Configuration 
+## Available Configuration
 
 `FunctionFactor` exposes set of configuraiton options which can be retrieved quering system catalog:
 
@@ -103,6 +102,7 @@ SELECT * FROM information_schema.df_settings WHERE NAME LIKE 'torchfusion%'
 | torchfusion.batch_size         | 1     | Batch size to be used. Valid value positive non-zero integers. Default: 1            |
 +--------------------------------+-------+--------------------------------------------------------------------------------------+
 ```
+
 Available configuration options can be changed:
 
 ```sql

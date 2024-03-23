@@ -82,7 +82,7 @@ fn find_item_type(dtype: &DataType) -> DataType {
         // We're interested in array type not the array.
         // There is discrepancy between array type defined by create function
         // `List(Field { name: \"field\", data_type: Float32, nullable:  ...``
-        // and arry type defined by create array operation
+        // and array type defined by create array operation
         //`[List(Field { name: \"item\", data_type: Float64, nullable: true, ...`
         // so we just extract bits we need
         //
