@@ -78,7 +78,7 @@ impl ScalarUDFImpl for ArgMax {
                 Self::find_max(values, offsets)
             }
             DataType::Float64 => {
-                let values = datafusion::common::cast::as_float32_array(features.values())?;
+                let values = datafusion::common::cast::as_float64_array(features.values())?;
                 Self::find_max(values, offsets)
             }
             DataType::Int32 => {
