@@ -5,6 +5,11 @@ Torchfusion is a very opinionated torch inference on datafusion, implemented to 
 > [!NOTE]
 > It has not been envisaged as a actively maintained library.
 
+Other project utilizing `FunctionFactory`:
+
+- [LightGBM Inference on DataFusion](https://github.com/milenkovicm/lightfusion)
+- [DataFusion JVM User Defined Functions (UDF)](https://github.com/milenkovicm/adhesive)
+
 ## How to use
 
 A torch model can be defined as and SQL UDF definition:
