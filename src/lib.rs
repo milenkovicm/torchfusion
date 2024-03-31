@@ -25,7 +25,7 @@ pub struct TorchFunctionFactory {}
 impl FunctionFactory for TorchFunctionFactory {
     async fn create(
         &self,
-        state: &SessionConfig,
+        state: &SessionState,
         statement: CreateFunction,
     ) -> datafusion::error::Result<RegisterFunction> {
         let model_name = statement.name;
@@ -52,6 +52,7 @@ impl FunctionFactory for TorchFunctionFactory {
             _ => format!("model/{}.spt", model_name),
         };
         let config = state
+            .config()
             .options()
             .extensions
             .get::<TorchConfig>()
@@ -96,15 +97,10 @@ fn find_item_type(dtype: &DataType) -> DataType {
 pub fn configure_context() -> SessionContext {
     let runtime_environment = RuntimeEnv::new(RuntimeConfig::new()).unwrap();
 
-    let mut session_config = SessionConfig::new().with_information_schema(true);
+    let session_config = SessionConfig::new()
+        .with_information_schema(true)
+        .with_option_extension(TorchConfig::default());
 
-    session_config
-        .options_mut()
-        .extensions
-        // register torch factory configuration
-        .insert(TorchConfig::default());
-
-    // let session_config = session_config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
     let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
         // register  factory configuration
         .with_function_factory(Arc::new(TorchFunctionFactory::default()));
