@@ -7,7 +7,8 @@ use datafusion::{
         context::{FunctionFactory, RegisterFunction, SessionContext, SessionState},
         runtime_env::{RuntimeConfig, RuntimeEnv},
     },
-    logical_expr::{CreateFunction, DefinitionStatement, ScalarUDF},
+    logical_expr::{CreateFunction, ScalarUDF},
+    scalar::ScalarValue,
 };
 use log::debug;
 
@@ -46,9 +47,9 @@ impl FunctionFactory for TorchFunctionFactory {
             .map(|t| find_item_type(&t))
             .unwrap_or(data_type_input.clone());
 
-        let model_file = match statement.params.as_ {
-            Some(DefinitionStatement::DoubleDollarDef(s)) => s,
-            Some(DefinitionStatement::SingleQuotedDef(s)) => s,
+        let model_file = match statement.params.function_body {
+            Some(datafusion::prelude::Expr::Literal(ScalarValue::Utf8(Some(s)))) => s,
+            // we should at least print a warning
             _ => format!("model/{}.spt", model_name),
         };
         let config = state

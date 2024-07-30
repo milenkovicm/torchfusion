@@ -7,7 +7,7 @@ use datafusion::{
     },
     common::{downcast_value, internal_err},
     error::{DataFusionError, Result},
-    logical_expr::{ColumnarValue, FuncMonotonicity, ScalarUDFImpl, Signature, Volatility},
+    logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility},
 };
 use std::{any::Any, fmt::Debug, sync::Arc};
 
@@ -95,10 +95,6 @@ impl ScalarUDFImpl for ArgMax {
 
     fn aliases(&self) -> &[String] {
         &[]
-    }
-
-    fn monotonicity(&self) -> Result<Option<FuncMonotonicity>> {
-        Ok(None)
     }
 }
 
