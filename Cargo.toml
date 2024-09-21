@@ -5,18 +5,26 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-tokio = { version = "^1.36", features = ["rt-multi-thread"]}
+tokio = { version = "^1.36", features = ["rt-multi-thread"] }
 datafusion = { version = "42.0" }
-# datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="799be5e76bd631608b2357dbbe600afc2cebc359" }
-thiserror = { version = "1.0"}
+thiserror = { version = "1.0" }
 log = { version = "0.4" }
 tch = { version = "0.17", features = ["download-libtorch"] }
 
 async-trait = { version = "0.1" }
 parking_lot = { version = "0.12" }
 
-argminmax ={ version = "0.6", default-features = false, features = ["arrow", "float", "half"]}
+argminmax = { version = "0.6", default-features = false, features = [
+    "arrow",
+    "float",
+    "half",
+] }
+
+#url = { version = "2" }
+#object_store = { version = "0" }
+#tokio-util = { version = "0", features = ["io", "io-util"] }
 
 [dev-dependencies]
-ctor = { version = "0.2"}
+ctor = { version = "0.2" }
 env_logger = { version = "0.11" }
+object_store = { version = "0", features = ["aws"] }

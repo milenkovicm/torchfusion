@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
 use datafusion::{
     arrow::datatypes::DataType,
+    common::config_err,
     execution::{
         config::SessionConfig,
         context::{FunctionFactory, RegisterFunction, SessionContext, SessionState},
@@ -12,6 +11,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use log::debug;
+use std::sync::Arc;
 
 mod argmax;
 mod config;
@@ -48,27 +48,46 @@ impl FunctionFactory for TorchFunctionFactory {
             .map(|t| find_item_type(&t))
             .unwrap_or(data_type_input.clone());
 
-        let model_file = match statement.params.function_body {
-            Some(datafusion::prelude::Expr::Literal(ScalarValue::Utf8(Some(s)))) => s,
-            // we should at least print a warning
-            _ => format!("model/{}.spt", model_name),
-        };
         let config = state
             .config()
             .options()
             .extensions
             .get::<TorchConfig>()
-            .expect("torch configuration to be configured");
+            .expect("torch configuration extension to be configured");
 
-        // same device will be used untill function is dropped
+        let model_file = match statement.params.function_body {
+            Some(datafusion::prelude::Expr::Literal(ScalarValue::Utf8(Some(s)))) => s,
+            _ => config_err!("model file should be specified")?,
+        };
+        // not sure if `ListingTableUrl` is the best way forward
+        // but it works.
+        let model_file_url = datafusion::datasource::listing::ListingTableUrl::parse(model_file)?;
+
+        log::debug!("loading model from url: {}", model_file_url);
+
+        let object_store = state
+            .runtime_env()
+            .object_store_registry
+            .get_store(model_file_url.as_ref())?;
+
+        let model_file = object_store
+            .get(model_file_url.prefix())
+            .await?
+            .bytes()
+            .await?;
+
+        let mut model_file = &model_file[..];
+
+        // function will use same device as long as it is
+        // not dropped. if change of defice is needed
+        // function should be droped and re-created.
+
         let device = config.device();
-        let non_blocking = config.model_non_blocking();
         let batch_size = config.batch_size();
         let model_udf = udf::load_torch_model(
             &model_name,
-            &model_file,
+            &mut model_file,
             device,
-            non_blocking,
             batch_size,
             data_type_input,
             data_type_return,
@@ -118,7 +137,8 @@ pub fn configure_context() -> SessionContext {
 }
 #[cfg(test)]
 mod test {
-    use datafusion::{assert_batches_eq, error::Result};
+    use datafusion::{assert_batches_eq, error::Result, execution::object_store::ObjectStoreUrl};
+    use object_store::aws::AmazonS3Builder;
 
     #[tokio::test]
     async fn e2e() -> Result<()> {
@@ -137,6 +157,76 @@ mod test {
         RETURNS FLOAT[]
         LANGUAGE TORCH
         AS 'model/iris.spt'
+        "#;
+
+        ctx.sql(sql).await?.collect().await?;
+
+        let sql = r#"
+        SELECT 
+        argmax(iris(features)) as f_inferred, 
+        argmax(iris([sl, sw, pl, pw])) as inferred
+        FROM iris 
+        LIMIT 15
+        "#;
+
+        let expected = vec![
+            "+------------+----------+",
+            "| f_inferred | inferred |",
+            "+------------+----------+",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 0          | 0        |",
+            "| 1          | 1        |",
+            "| 1          | 1        |",
+            "+------------+----------+",
+        ];
+
+        let result = ctx.sql(sql).await?.collect().await?;
+        assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[ignore = "too lazy to setup testcontainer for this test"]
+    #[tokio::test]
+    async fn e2e_s3() -> Result<()> {
+        let ctx = crate::configure_context();
+        ctx.state_ref().write().runtime_env().register_object_store(
+            ObjectStoreUrl::parse("s3://modelrepo").unwrap().as_ref(),
+            std::sync::Arc::new(
+                AmazonS3Builder::from_env()
+                    .with_bucket_name("modelrepo")
+                    .with_allow_http(true)
+                    .with_access_key_id("TxT2BsMsVSWgUikQm4mq")
+                    .with_secret_access_key("FWFvBnRrxy2Up42LnA1QzGtmC8b6VZAhE7Tbt45R")
+                    .with_endpoint("http://host.docker.internal:9000")
+                    .with_region("local")
+                    .build()
+                    .unwrap(),
+            ),
+        );
+        let sql = r#"
+        CREATE EXTERNAL TABLE iris 
+        STORED AS PARQUET 
+        LOCATION 'data/iris.snappy.parquet';
+        "#;
+
+        ctx.sql(sql).await?.collect().await?;
+
+        let sql = r#"
+        CREATE FUNCTION iris(FLOAT[])
+        RETURNS FLOAT[]
+        LANGUAGE TORCH
+        AS 's3://modelrepo/iris.spt'
         "#;
 
         ctx.sql(sql).await?.collect().await?;

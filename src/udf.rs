@@ -8,8 +8,8 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::{ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility},
 };
-use std::{any::Any, fmt::Debug, marker::PhantomData, sync::Arc};
-use tch::{nn::Module, CModule, Device, Kind, Tensor};
+use std::{any::Any, fmt::Debug, io::Read, marker::PhantomData, sync::Arc};
+use tch::{nn::Module, CModule, Device, Tensor};
 
 /// Very opiated torch model integration
 /// it has been implemented to demonstrate integration
@@ -17,11 +17,10 @@ use tch::{nn::Module, CModule, Device, Kind, Tensor};
 ///
 /// do not use it for anything
 
-pub fn load_torch_model(
+pub fn load_torch_model<F: Read>(
     model_name: &str,
-    model_file: &str,
+    model_file: &mut F,
     device: Device,
-    non_blocking: bool,
     batch_size: usize,
     input_type: DataType,
     return_type: DataType,
@@ -32,7 +31,6 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
-                non_blocking,
                 batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
@@ -43,7 +41,6 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
-                non_blocking,
                 batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
@@ -54,7 +51,6 @@ pub fn load_torch_model(
                 model_name.to_string(),
                 model_file,
                 device,
-                non_blocking,
                 batch_size,
             )?;
             Ok(ScalarUDF::from(model_udf))
@@ -89,16 +85,15 @@ where
     I: ArrowPrimitiveType + Debug,
     R: ArrowPrimitiveType + Debug,
 {
-    fn new_from_file(
+    fn new_from_file<F: Read>(
         name: String,
-        model_file: &str,
+        model_file: &mut F,
         device: Device,
-        non_blocking: bool,
         batch_size: usize,
     ) -> Result<Self> {
-        let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
+        //let kind = Self::to_torch_type(&I::DATA_TYPE.clone())?;
 
-        let model = Self::load_model(model_file, device, kind, non_blocking)?;
+        let model = Self::load_model(model_file, device)?;
         // TODO: at this point we can verify that input and output layers
         //       have the same types like function input and output
         //
@@ -128,16 +123,11 @@ where
         }
     }
 
-    fn load_model(
-        model_file: &str,
-        device: Device,
-        kind: Kind,
-        non_blocking: bool,
-    ) -> Result<CModule> {
-        let mut model = tch::CModule::load(model_file)
+    fn load_model<F: Read>(model_file: &mut F, device: Device) -> Result<CModule> {
+        let mut model = tch::CModule::load_data_on_device(model_file, device)
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-        model.to(device, kind, non_blocking);
+        //model.to(device, kind, non_blocking);
         model
             .f_set_eval()
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
@@ -293,19 +283,6 @@ where
             OffsetBuffer::new(ScalarBuffer::from(result_offsets)),
             Arc::new(result.finish()) as ArrayRef,
         ))
-    }
-
-    fn to_torch_type(dtype: &DataType) -> Result<Kind> {
-        match &dtype {
-            DataType::Boolean => Ok(tch::Kind::Bool),
-            DataType::Int16 => Ok(tch::Kind::Int16),
-            DataType::Int32 => Ok(tch::Kind::Int),
-            DataType::Int64 => Ok(tch::Kind::Int64),
-            DataType::Float16 => Ok(tch::Kind::BFloat16),
-            DataType::Float32 => Ok(tch::Kind::Float),
-            DataType::Float64 => Ok(tch::Kind::Double),
-            t => exec_err!("Data type not supported: {t}")?,
-        }
     }
 }
 

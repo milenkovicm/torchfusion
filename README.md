@@ -103,7 +103,6 @@ SELECT * FROM information_schema.df_settings WHERE NAME LIKE 'torchfusion%'
 +--------------------------------+-------+--------------------------------------------------------------------------------------+
 | torchfusion.device             | Cpu   | Device to run model on. Valid values 'cpu', 'cuda', 'mps', 'vulkan'. Default: 'cpu'  |
 | torchfusion.cuda_device        | 0     | Cuda device to use. Valid value positive integer. Default: 0                         |
-| torchfusion.model_non_blocking | false | Non-blocking memory transfer. Valid value boolean. Default: false                    |
 | torchfusion.batch_size         | 1     | Batch size to be used. Valid value positive non-zero integers. Default: 1            |
 +--------------------------------+-------+--------------------------------------------------------------------------------------+
 ```
