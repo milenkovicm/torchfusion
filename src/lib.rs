@@ -6,6 +6,7 @@ use datafusion::{
         config::SessionConfig,
         context::{FunctionFactory, RegisterFunction, SessionContext, SessionState},
         runtime_env::{RuntimeConfig, RuntimeEnv},
+        SessionStateBuilder,
     },
     logical_expr::{CreateFunction, ScalarUDF},
     scalar::ScalarValue,
@@ -102,9 +103,12 @@ pub fn configure_context() -> SessionContext {
         .with_information_schema(true)
         .with_option_extension(TorchConfig::default());
 
-    let state = SessionState::new_with_config_rt(session_config, Arc::new(runtime_environment))
-        // register  factory configuration
-        .with_function_factory(Arc::new(TorchFunctionFactory::default()));
+    let state = SessionStateBuilder::new()
+        .with_config(session_config)
+        .with_runtime_env(runtime_environment.into())
+        .with_default_features()
+        .with_function_factory(Some(Arc::new(TorchFunctionFactory::default())))
+        .build();
 
     let ctx = SessionContext::new_with_state(state);
 
