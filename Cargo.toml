@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 tokio = { version = "^1.36", features = ["rt-multi-thread"] }
-datafusion = { version = "42.0" }
+datafusion = { version = "43.0" }
 thiserror = { version = "2.0" }
 log = { version = "0.4" }
 tch = { version = "0.18", features = ["download-libtorch"] }
