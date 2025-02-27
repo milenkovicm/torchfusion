@@ -25,6 +25,6 @@ argminmax = { version = "0.6", default-features = false, features = [
 #tokio-util = { version = "0", features = ["io", "io-util"] }
 
 [dev-dependencies]
-ctor = { version = "0.3" }
+ctor = { version = "0.4" }
 env_logger = { version = "0.11" }
 object_store = { version = "0", features = ["aws"] }
